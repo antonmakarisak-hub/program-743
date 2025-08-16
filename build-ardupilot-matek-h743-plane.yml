@@ -1,0 +1,67 @@
+name: Build ArduPilot for Matek H743 (Plane)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+
+      - name: Install base dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git python3 python3-pip python3-setuptools python3-dev build-essential             gcc-arm-none-eabi binutils-arm-none-eabi libnewlib-arm-none-eabi             cmake pkg-config libncurses5-dev libncursesw5-dev libusb-1.0-0-dev             wget unzip
+          python3 -m pip install --upgrade pip
+          python3 -m pip install empy future pyserial lxml pexpect
+
+      - name: Clone ArduPilot
+        run: |
+          git clone --depth=1 https://github.com/ArduPilot/ardupilot.git
+          cd ardupilot
+          git submodule update --init --recursive
+
+      - name: Install ArduPilot prereqs
+        run: |
+          cd ardupilot
+          Tools/environment_install/install-prereqs-ubuntu.sh -y || true
+          echo 'source ~/.profile' >> $GITHUB_ENV
+
+      - name: Apply baro patch (enable ALL barometers)
+        run: |
+          cd ardupilot
+          bash "${{ github.workspace }}/scripts/apply_baro_patch.sh"
+
+      - name: Configure (MatekH743) and build Plane
+        run: |
+          cd ardupilot
+          ./waf configure --board=MatekH743
+          ./waf plane
+
+      - name: Prepare artifacts (.apj, .hex)
+        shell: bash
+        run: |
+          set -e
+          cd ardupilot
+          BIN_DIR=$(ls -d build/*/bin | head -n1)
+          echo "BIN_DIR=${BIN_DIR}"
+          ls -lah "${BIN_DIR}"
+
+          APJ=$(ls "${BIN_DIR}"/arduplane.apj)
+          ELF=$(ls "${BIN_DIR}"/arduplane.elf)
+
+          arm-none-eabi-objcopy -O ihex "${ELF}" "${BIN_DIR}/arduplane.hex"
+
+          mkdir -p "${{ github.workspace }}/out"
+          cp "${APJ}" "${{ github.workspace }}/out/"
+          cp "${BIN_DIR}/arduplane.hex" "${{ github.workspace }}/out/"
+          cd "${{ github.workspace }}/out" && zip -r arduplane_artifacts.zip .
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: arduplane_artifacts
+          path: out/arduplane_artifacts.zip
